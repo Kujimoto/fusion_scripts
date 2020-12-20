@@ -12,6 +12,18 @@ _app = adsk.core.Application.cast(None)
 _ui = adsk.core.UserInterface.cast(None)
 _handlers = []
 
+# Setting
+# Global variables are used to share input value between call back functions
+_input_num = adsk.core.ValueInput.cast(None)
+_output_num = adsk.core.ValueInput.cast(None)
+_channel_width = adsk.core.ValueInput.cast(None)
+_channel_height = adsk.core.ValueInput.cast(None)
+_resistor_width = adsk.core.ValueInput.cast(None)
+_resistor_num = adsk.core.ValueInput.cast(None)
+_resistor_radius = adsk.core.ValueInput.cast(None)
+_ladder_distance = adsk.core.ValueInput.cast(None)
+_ladder_width = adsk.core.ValueInput.cast(None)
+
 def run(context):
     try:
         global _app, _ui
@@ -66,8 +78,20 @@ class GradCommandCreateHandler(adsk.core.CommandCreatedEventHandler):
             cmd = event_args.command
             cmd.isExecutedWhenPreEmpted = False
             inputs = cmd.commandInputs
-            numTeeth = inputs.addStringValueInput('numTeeth', 'Number of Teeth', '0')
 
+            global _input_num, _output_num, _channel_height, _channel_width, _resistor_width, _resistor_radius, _resistor_num, _ladder_distance, _ladder_width
+
+            numTeeth = inputs.addStringValueInput('numTeeth', 'Number of Teeth', '0')
+            _input_num = inputs.addStringValueInput('input_num', 'Number of inputs', '2')
+            _output_num = inputs.addStringValueInput('output_num', 'Number of outputs', '5')
+            _channel_width = inputs.addStringValueInput('channel_width', 'Width of the channel (um)', '200')
+            _channel_height = inputs.addStringValueInput('channel_height', 'Height of the channel (um)', '200')
+            _resistor_width = inputs.addStringValueInput('resistor_width', 'Width of resistor structure (um)', '500')
+            _resistor_num = inputs.addStringValueInput('resistor_num', 'Number of resistor structure', '2')
+            _resistor_radius = inputs.addStringValueInput('resistor_radius', 'Radius of resistor structure (um)', '200')
+            _ladder_distance = inputs.addStringValueInput('ladder_distance', 'Distance between ladder steps', '1000')
+            _ladder_width = inputs.addStringValueInput('ladder_width', 'Width of ladder', '500')         
+            
              # Connect to the command related events.
             onExecute = GradCommandExecuteHandler()
             cmd.execute.add(onExecute)
@@ -98,7 +122,13 @@ class GradCommandExecuteHandler(adsk.core.CommandEventHandler):
             event_args = adsk.core.CommandEventArgs.cast(args)
             # Obtain design
             des = adsk.fusion.Design.cast(_app.activeProduct)
-            grad_gen = draw_grad_generator(des, 2, 4, 0.005)
+            
+            rad = int(_resistor_radius.value) / 10000
+            resistor_num = int(_resistor_num.value)
+            channel_width = int(_channel_width.value) / 10000
+            channel_height = int(_channel_height.value) / 10000
+            grad_gen = draw_grad_generator(des, int(_input_num.value), int(_output_num.value), rad,
+                                            resistor_num, channel_width, channel_height)
 
         except:
             if _ui:
@@ -129,7 +159,8 @@ class GradCommandValidateInputsHandler(adsk.core.ValidateInputsEventHandler):
             if _ui:
                 _ui.messageBox('Failed:\n{}'.format(traceback.format_exc()))
 
-def draw_grad_generator(design, input_num: int, output_num: int, resistor_rad: float):
+def draw_grad_generator(design, input_num: int, output_num: int, resistor_rad: float, resistor_numm: float,
+                        channel_width: float, channel_height: float):
     try:
         # Create a new component by creating an occurrence.
         occs = design.rootComponent.occurrences
@@ -145,56 +176,58 @@ def draw_grad_generator(design, input_num: int, output_num: int, resistor_rad: f
         # Draw a circle for the base.
         original_point = adsk.core.Point3D.create(0, 0, 0)
         for i in range(input_num+1, output_num+1):
-            original_point = draw_grad_stage(sketches, xyPlane, newComp, original_point, i, 0.5, 0.5, 0.02, 2, 0.02, 0.3)
+            original_point = draw_grad_stage(sketches, xyPlane, occs, original_point, i, 0.5, 0.5, channel_width, channel_height, resistor_numm, resistor_rad, 0.3)
 
         baseSketch.isComputeDeferred = False
     except:
         if _ui:
             _ui.messageBox('Failed:\n{}'.format(traceback.format_exc()))
 
-def draw_grad_stage(sketches, plane, comp,
+def draw_grad_stage(sketches, plane, occs,
                      original_point, unit_num: int,
                      connect_width: float, height: float,
-                     channel_width: float, curve_num: int,
-                     curve_rad: float, resistor_width: float):
+                     channel_width: float, channel_height: float,
+                     curve_num: int, curve_rad: float, resistor_width: float):
 
     # Draw connecting channel
-    sketch = sketches.add(plane)
-    connecting = sketch.sketchCurves.sketchLines
+    mat = adsk.core.Matrix3D.create()
+    newOcc = occs.addNewComponent(mat)        
+    comp = adsk.fusion.Component.cast(newOcc.component)
+    sketches = comp.sketches
+    plane = comp.xYConstructionPlane
+    
     left_end = adsk.core.Point3D.create(original_point.x - (unit_num - 1) * connect_width/2, original_point.y, original_point.z)
     right_end = adsk.core.Point3D.create(original_point.x - (unit_num - 2) * connect_width/2, original_point.y + channel_width, original_point.z)
-    connecting.addTwoPointRectangle(left_end, right_end)
+    #connecting.addTwoPointRectangle(left_end, right_end)
 
     sketch = draw_single_grad(sketches, plane, comp, left_end,
                      connect_width, height,
                      channel_width, curve_num,
                      curve_rad, resistor_width)
-    
 
     extrudes = comp.features.extrudeFeatures
     
     prof = sketch.profiles.item(0)
     ext_input = extrudes.createInput(prof, adsk.fusion.FeatureOperations.NewBodyFeatureOperation)
-    distance = adsk.core.ValueInput.createByReal(0.2)
+    distance = adsk.core.ValueInput.createByReal(channel_height)
     ext_input.setDistanceExtent(False, distance)
     channel_extrude = extrudes.add(ext_input)
 
     prof = sketch.profiles.item(1)
     ext_input = extrudes.createInput(prof, adsk.fusion.FeatureOperations.NewBodyFeatureOperation)
-    distance = adsk.core.ValueInput.createByReal(0.2)
+    distance = adsk.core.ValueInput.createByReal(channel_height)
     ext_input.setDistanceExtent(False, distance)
     channel_extrude = extrudes.add(ext_input)
 
     prof = sketch.profiles.item(2)
     ext_input = extrudes.createInput(prof, adsk.fusion.FeatureOperations.NewBodyFeatureOperation)
-    distance = adsk.core.ValueInput.createByReal(0.2)
+    distance = adsk.core.ValueInput.createByReal(channel_height)
     ext_input.setDistanceExtent(False, distance)
     channel_extrude = extrudes.add(ext_input)
 
     # Create input entities for ractangular pattern
     input_entities = adsk.core.ObjectCollection.create()
 
-    
     # Get the body created by extrusion
     for i in range(extrudes.count):
 
@@ -205,10 +238,9 @@ def draw_grad_stage(sketches, plane, comp,
     x_axis = comp.xConstructionAxis
     y_axis = comp.yConstructionAxis
 
-    # Quantity and distance
+    # Quantity and distance for rect pattern
 
     quantity_one = adsk.core.ValueInput.createByString('{}'.format(unit_num))
-    
     distance_one = adsk.core.ValueInput.createByReal(connect_width)
     quantity_two = adsk.core.ValueInput.createByString('{}'.format(1))
     distance_two = adsk.core.ValueInput.createByReal(0)
@@ -223,29 +255,25 @@ def draw_grad_stage(sketches, plane, comp,
 
     #Create the rectangular pattern
     rectangula_feature = rectangular_pattern.add(rectangular_pattern_input)
-
+    rectangular_pattern.itemByName
     for i in range(1, unit_num-1):
-        left_end = adsk.core.Point3D.create(original_point.x - (unit_num  - 2 * i) * connect_width/2, original_point.y, original_point.z)
+        #left_end = adsk.core.Point3D.create(original_point.x - (unit_num  - 2 * i) * connect_width/2, original_point.y, original_point.z)
         right_end = adsk.core.Point3D.create(original_point.x - (unit_num - 2 * (i + 1)) * connect_width/2, original_point.y + channel_width, original_point.z)
-        connecting.addTwoPointRectangle(left_end, right_end)
+        #connecting.addTwoPointRectangle(left_end, right_end)
         single_original = adsk.core.Point3D.create(left_end.x + connect_width/2, left_end.y, left_end.z)
-        draw_single_grad(sketches, plane,
-                        comp, single_original,
-                        connect_width, height,
-                        channel_width, curve_num,
-                        curve_rad, resistor_width)
     
-    left_end = adsk.core.Point3D.create(original_point.x + (unit_num -2) * connect_width/2, original_point.y + channel_width, original_point.z)
-    right_end = adsk.core.Point3D.create(original_point.x + (unit_num - 1) * connect_width/2, original_point.y, original_point.z)
+    #left_end = adsk.core.Point3D.create(original_point.x + (unit_num -2) * connect_width/2, original_point.y , original_point.z)
+    sketch = sketches.add(plane)
+    connecting = sketch.sketchCurves.sketchLines
+    right_end = adsk.core.Point3D.create(original_point.x + (unit_num - 1) * connect_width/2, original_point.y + channel_width, original_point.z)
     connecting.addTwoPointRectangle(left_end, right_end)
-
-    draw_single_grad(sketches, plane, comp, right_end, 
-                     connect_width, height,
-                     channel_width, curve_num,
-                     curve_rad, resistor_width)
+    prof = sketch.profiles.item(0)
+    ext_input = extrudes.createInput(prof, adsk.fusion.FeatureOperations.NewBodyFeatureOperation)
+    distance = adsk.core.ValueInput.createByReal(channel_height)
+    ext_input.setDistanceExtent(False, distance)
+    channel_extrude = extrudes.add(ext_input)
 
     return adsk.core.Point3D.create(original_point.x, original_point.y + height, original_point.z)
-
 
 def draw_single_grad(sketches, plane,
                      comp, original_point,
@@ -256,7 +284,6 @@ def draw_single_grad(sketches, plane,
 
     # Draw connecting channel
     sketch = sketches.add(plane)
-    #connecting = sketch.sketchCurves.sketchLines
     
     # Draw resistor part
     # - Straight part
